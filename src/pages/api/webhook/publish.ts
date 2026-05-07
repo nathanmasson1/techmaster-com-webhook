@@ -20,7 +20,7 @@ function buildMarkdown(data: any): string {
 title: "${title.replace(/"/g, '\\"')}"
 description: "${description ? description.replace(/"/g, '\\"') : ''}"
 pubDate: ${pubDate}
-image: "${image || ''}"
+heroImage: "${image || ''}"
 category: "${category || 'blog'}"
 author: "${author || 'Redação'}"
 tags:${tagsStr}
