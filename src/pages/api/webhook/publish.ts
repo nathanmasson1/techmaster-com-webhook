@@ -20,7 +20,7 @@ function buildMarkdown(data: any): string {
 title: "${title.replace(/"/g, '\\"')}"
 description: "${description ? description.replace(/"/g, '\\"') : ''}"
 pubDate: ${pubDate}
-heroImage: "${image || ''}"
+image: "${image || ''}"
 category: "${category || 'blog'}"
 author: "${author || 'Redação'}"
 tags:${tagsStr}
@@ -211,6 +211,96 @@ export const POST: APIRoute = async ({ request }) => {
             path: filePath,
             sha: responseData.content?.sha
         }), { status: 200 });
+
+    } catch (err: any) {
+        console.error('Webhook Error:', err);
+        return new Response(
+            JSON.stringify({ error: err.message || 'Internal Server Error' }),
+            { status: 500, headers: { 'Content-Type': 'application/json' } }
+        );
+    }
+};
+
+export const DELETE: APIRoute = async ({ request }) => {
+    try {
+        const WEBHOOK_SECRET = import.meta.env.WEBHOOK_SECRET;
+        const authHeader = request.headers.get('Authorization');
+
+        if (!WEBHOOK_SECRET) {
+            return new Response(JSON.stringify({ error: 'Server configuration error' }), { status: 500 });
+        }
+
+        if (!authHeader || authHeader !== `Bearer ${WEBHOOK_SECRET}`) {
+            return new Response(JSON.stringify({ error: 'Unauthorized' }), { status: 401 });
+        }
+
+        const data = await request.json();
+        if (!data.slug) {
+            return new Response(JSON.stringify({ error: 'Missing slug' }), { status: 400 });
+        }
+
+        const slug = data.slug;
+        const filePath = `src/content/blog/${slug}.md`;
+        
+        const GITHUB_TOKEN = import.meta.env.GITHUB_TOKEN;
+        const GITHUB_OWNER = import.meta.env.GITHUB_OWNER;
+        const GITHUB_REPO = import.meta.env.GITHUB_REPO;
+        const repo = `${GITHUB_OWNER}/${GITHUB_REPO}`;
+
+        const githubHeaders: Record<string, string> = {
+            Authorization: `Bearer ${GITHUB_TOKEN}`,
+            Accept: 'application/vnd.github+json',
+        };
+
+        if (!GITHUB_TOKEN || !GITHUB_OWNER || !GITHUB_REPO) {
+            const absPath = nodePath.join(PROJECT_ROOT, filePath);
+            try {
+                await fs.unlink(absPath);
+                return new Response(JSON.stringify({ success: true, message: 'Post deleted locally' }), { status: 200 });
+            } catch (err: any) {
+                if (err.code === 'ENOENT') {
+                     return new Response(JSON.stringify({ error: 'File not found locally' }), { status: 404 });
+                }
+                throw err;
+            }
+        }
+
+        const githubUrl = `https://api.github.com/repos/${repo}/contents/${filePath}`;
+        
+        let sha: string | undefined;
+        try {
+            const existingRes = await fetch(githubUrl, { headers: githubHeaders });
+            if (existingRes.ok) {
+                const existingData = await existingRes.json();
+                sha = existingData.sha;
+            } else {
+                 return new Response(JSON.stringify({ error: 'Post not found on GitHub' }), { status: 404 });
+            }
+        } catch (e) {
+             return new Response(JSON.stringify({ error: 'Failed to fetch post from GitHub' }), { status: 500 });
+        }
+
+        if (sha) {
+            const deleteBody = {
+                message: `Delete post: ${slug} via Webhook`,
+                sha: sha,
+            };
+
+            const res = await fetch(githubUrl, {
+                method: 'DELETE',
+                headers: { ...githubHeaders, 'Content-Type': 'application/json' },
+                body: JSON.stringify(deleteBody),
+            });
+
+            if (!res.ok) {
+                const errData = await res.json();
+                throw new Error(`GitHub API Error: ${errData.message}`);
+            }
+
+            return new Response(JSON.stringify({ success: true, message: 'Post deleted from GitHub' }), { status: 200 });
+        }
+        
+        return new Response(JSON.stringify({ error: 'Unknown error' }), { status: 500 });
 
     } catch (err: any) {
         console.error('Webhook Error:', err);
